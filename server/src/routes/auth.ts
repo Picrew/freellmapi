@@ -17,23 +17,27 @@ export const authRouter = Router();
 // /logout and /me validate the token themselves.
 
 const credentialsSchema = z.object({
-  email: z.string().email('A valid email is required'),
+  email: z.string().trim().min(1, 'An account name is required'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
 });
 
 // ── Brute-force throttle ──────────────────────────────────────────────────
-// Simple in-memory per-email limiter. A local single-user tool doesn't need a
+// Simple in-memory per-account limiter. A local single-user tool doesn't need a
 // distributed store; this just blunts online password guessing.
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 15 * 60 * 1000;
 const attempts = new Map<string, { count: number; lockedUntil: number }>();
 
+function attemptKey(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 function isLockedOut(email: string): boolean {
-  const a = attempts.get(email.toLowerCase());
+  const a = attempts.get(attemptKey(email));
   return !!a && a.lockedUntil > Date.now();
 }
 function recordFailure(email: string): void {
-  const key = email.toLowerCase();
+  const key = attemptKey(email);
   const a = attempts.get(key) ?? { count: 0, lockedUntil: 0 };
   a.count++;
   if (a.count >= MAX_ATTEMPTS) {
@@ -43,7 +47,7 @@ function recordFailure(email: string): void {
   attempts.set(key, a);
 }
 function clearFailures(email: string): void {
-  attempts.delete(email.toLowerCase());
+  attempts.delete(attemptKey(email));
 }
 
 function bearer(req: Request): string | undefined {
@@ -94,8 +98,8 @@ authRouter.post('/login', (req: Request, res: Response) => {
   const user = verifyCredentials(email, password);
   if (!user) {
     recordFailure(email);
-    // Same message whether the email exists or not — don't leak which.
-    res.status(401).json({ error: { message: 'Invalid email or password', type: 'authentication_error' } });
+    // Same message whether the account exists or not — don't leak which.
+    res.status(401).json({ error: { message: 'Invalid account or password', type: 'authentication_error' } });
     return;
   }
 

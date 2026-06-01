@@ -23,6 +23,9 @@ RUN npm ci
 FROM deps AS build
 WORKDIR /app
 
+ARG VITE_BASE=/
+ENV VITE_BASE=${VITE_BASE}
+
 COPY . .
 
 RUN npm run build

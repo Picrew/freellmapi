@@ -20,7 +20,7 @@ function Centered({ children }: { children: ReactNode }) {
 }
 
 function AuthForm({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed: () => void }) {
-  const [email, setEmail] = useState('')
+  const [account, setAccount] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -34,7 +34,7 @@ function AuthForm({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed: () =>
     try {
       const res = await apiFetch<{ token: string }>(isSetup ? '/api/auth/setup' : '/api/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: account, password }),
       })
       setToken(res.token)
       onAuthed()
@@ -55,19 +55,19 @@ function AuthForm({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed: () =>
         <h1 className="text-base font-medium">{isSetup ? 'Create your account' : 'Sign in'}</h1>
         <p className="text-xs text-muted-foreground mt-1 mb-4">
           {isSetup
-            ? 'Set the email and password that will protect this dashboard.'
+            ? 'Set the account and password that will protect this dashboard.'
             : 'Sign in to manage your keys, routing, and analytics.'}
         </p>
         <form onSubmit={submit} className="space-y-3">
           <div className="space-y-1.5">
-            <Label className="text-xs" htmlFor="auth-email">Email</Label>
+            <Label className="text-xs" htmlFor="auth-account">Account</Label>
             <Input
-              id="auth-email"
-              type="email"
+              id="auth-account"
+              type="text"
               autoComplete="username"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="you@example.com"
+              value={account}
+              onChange={e => setAccount(e.target.value)}
+              placeholder="Jayden"
             />
           </div>
           <div className="space-y-1.5">
@@ -82,7 +82,7 @@ function AuthForm({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed: () =>
             />
           </div>
           {error && <p className="text-destructive text-xs">{error}</p>}
-          <Button type="submit" className="w-full" disabled={busy || !email || !password}>
+          <Button type="submit" className="w-full" disabled={busy || !account.trim() || !password}>
             {busy ? (isSetup ? 'Creating…' : 'Signing in…') : isSetup ? 'Create account' : 'Sign in'}
           </Button>
         </form>

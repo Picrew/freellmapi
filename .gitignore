@@ -6,8 +6,14 @@ server/data/
 *.db-shm
 *.bak
 .env
+.env.*
+!.env.example
 .env.local
 .DS_Store
+.playwright-cli/
+*.log
+*.pem
+*.key
 
 # Personal deployment scripts (contain keys/credentials — kept local)
 deploy-pi.sh

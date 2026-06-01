@@ -4,6 +4,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        VITE_BASE: ${VITE_BASE:-/}
     env_file:
       - .env
     environment:
