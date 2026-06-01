@@ -4,6 +4,8 @@ import { apiFetch, setToken, UNAUTHORIZED_EVENT } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { LanguageToggle } from '@/components/language-toggle'
+import { useI18n } from '@/lib/i18n'
 
 interface AuthStatus {
   needsSetup: boolean
@@ -14,12 +16,16 @@ interface AuthStatus {
 function Centered({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
+      <div className="fixed right-4 top-4">
+        <LanguageToggle />
+      </div>
       <div className="w-full max-w-sm">{children}</div>
     </div>
   )
 }
 
 function AuthForm({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed: () => void }) {
+  const { t } = useI18n()
   const [account, setAccount] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -39,7 +45,7 @@ function AuthForm({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed: () =>
       setToken(res.token)
       onAuthed()
     } catch (err) {
-      setError((err as Error).message)
+      setError(t((err as Error).message))
     } finally {
       setBusy(false)
     }
@@ -52,15 +58,15 @@ function AuthForm({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed: () =>
         <span className="font-semibold tracking-tight text-sm">FreeLLMAPI</span>
       </div>
       <div className="rounded-lg border bg-card p-6">
-        <h1 className="text-base font-medium">{isSetup ? 'Create your account' : 'Sign in'}</h1>
+        <h1 className="text-base font-medium">{isSetup ? t('Create your account') : t('Sign in')}</h1>
         <p className="text-xs text-muted-foreground mt-1 mb-4">
           {isSetup
-            ? 'Set the account and password that will protect this dashboard.'
-            : 'Sign in to manage your keys, routing, and analytics.'}
+            ? t('Set the account and password that will protect this dashboard.')
+            : t('Sign in to manage your keys, routing, and analytics.')}
         </p>
         <form onSubmit={submit} className="space-y-3">
           <div className="space-y-1.5">
-            <Label className="text-xs" htmlFor="auth-account">Account</Label>
+            <Label className="text-xs" htmlFor="auth-account">{t('Account')}</Label>
             <Input
               id="auth-account"
               type="text"
@@ -71,19 +77,19 @@ function AuthForm({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed: () =>
             />
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs" htmlFor="auth-password">Password</Label>
+            <Label className="text-xs" htmlFor="auth-password">{t('Password')}</Label>
             <Input
               id="auth-password"
               type="password"
               autoComplete={isSetup ? 'new-password' : 'current-password'}
               value={password}
               onChange={e => setPassword(e.target.value)}
-              placeholder={isSetup ? 'at least 8 characters' : 'your password'}
+              placeholder={isSetup ? t('at least 8 characters') : t('your password')}
             />
           </div>
           {error && <p className="text-destructive text-xs">{error}</p>}
           <Button type="submit" className="w-full" disabled={busy || !account.trim() || !password}>
-            {busy ? (isSetup ? 'Creating…' : 'Signing in…') : isSetup ? 'Create account' : 'Sign in'}
+            {busy ? (isSetup ? t('Creating…') : t('Signing in…')) : isSetup ? t('Create account') : t('Sign in')}
           </Button>
         </form>
       </div>
@@ -92,6 +98,7 @@ function AuthForm({ mode, onAuthed }: { mode: 'setup' | 'login'; onAuthed: () =>
 }
 
 export function AuthGate({ children }: { children: ReactNode }) {
+  const { t } = useI18n()
   const queryClient = useQueryClient()
   const { data, isLoading, isError, refetch } = useQuery<AuthStatus>({
     queryKey: ['auth-status'],
@@ -111,12 +118,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
     refetch()
   }
 
-  if (isLoading) return <Centered><p className="text-sm text-muted-foreground text-center">Loading…</p></Centered>
+  if (isLoading) return <Centered><p className="text-sm text-muted-foreground text-center">{t('Loading…')}</p></Centered>
   if (isError || !data) {
     return (
       <Centered>
         <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-xs text-destructive">
-          Can't reach the server. Make sure the backend is running (<code className="font-mono">npm run dev</code>).
+          {t("Can't reach the server. Make sure the backend is running")} (<code className="font-mono">npm run dev</code>).
         </div>
       </Centered>
     )

@@ -21,6 +21,7 @@ import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { PageHeader } from '@/components/page-header'
+import { useI18n } from '@/lib/i18n'
 
 interface FallbackEntry {
   modelDbId: number
@@ -75,6 +76,7 @@ const platformColors: Record<string, string> = {
 }
 
 function TokenUsageBar({ data }: { data: TokenUsageData }) {
+  const { language, t } = useI18n()
   const { totalBudget, totalUsed, models } = data
   const remaining = Math.max(0, totalBudget - totalUsed)
   const remainingPct = totalBudget > 0 ? Math.round((remaining / totalBudget) * 100) : 0
@@ -91,11 +93,11 @@ function TokenUsageBar({ data }: { data: TokenUsageData }) {
   return (
     <section className="rounded-lg border bg-card p-5">
       <div className="flex items-baseline justify-between mb-3">
-        <h2 className="text-sm font-medium">Monthly token budget</h2>
+        <h2 className="text-sm font-medium">{t('Monthly token budget')}</h2>
         <span className="text-xs text-muted-foreground tabular-nums">
-          <span className="text-foreground font-medium">{formatTokens(remaining)}</span> remaining
+          <span className="text-foreground font-medium">{formatTokens(remaining)}</span> {t('remaining')}
           <span className="mx-1.5">·</span>
-          {remainingPct}% of {formatTokens(totalBudget)}
+          {language === 'zh' ? `占总额 ${remainingPct}%（${formatTokens(totalBudget)}）` : `${remainingPct}% ${t('of')} ${formatTokens(totalBudget)}`}
         </span>
       </div>
 
@@ -103,7 +105,7 @@ function TokenUsageBar({ data }: { data: TokenUsageData }) {
         {modelsWithWidth.map((m, i) => (
           <div
             key={i}
-            title={`${m.displayName} (${m.platform}) — ${formatTokens(m.remainingTokens)} remaining`}
+            title={`${m.displayName} (${m.platform}) — ${formatTokens(m.remainingTokens)} ${t('remaining')}`}
             style={{
               width: `${m.widthPct}%`,
               backgroundColor: platformColors[m.platform] ?? '#94a3b8',
@@ -112,7 +114,7 @@ function TokenUsageBar({ data }: { data: TokenUsageData }) {
         ))}
         {totalUsed > 0 && (
           <div
-            title={`Used — ${formatTokens(totalUsed)}`}
+            title={`${t('Used')} — ${formatTokens(totalUsed)}`}
             className="bg-muted-foreground/30"
             style={{ width: `${usedPct}%` }}
           />
@@ -145,6 +147,7 @@ function SortableModelRow({
   index: number
   onToggle: (modelDbId: number, enabled: boolean) => void
 }) {
+  const { t } = useI18n()
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: entry.modelDbId,
   })
@@ -164,7 +167,7 @@ function SortableModelRow({
         {...attributes}
         {...listeners}
         className="cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-foreground transition-colors"
-        aria-label="Drag to reorder"
+        aria-label={t('Drag to reorder')}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
           <circle cx="9" cy="6" r="1.5" /><circle cx="15" cy="6" r="1.5" />
@@ -179,24 +182,24 @@ function SortableModelRow({
           <span className="text-xs text-muted-foreground">{entry.platform}</span>
           {entry.supportsVision && (
             <span
-              title="Accepts image input"
+              title={t('Accepts image input')}
               className="text-xs rounded-full px-2 py-0.5 bg-cyan-600/15 text-cyan-700 dark:bg-cyan-400/15 dark:text-cyan-400"
             >
-              Vision
+              {t('Vision')}
             </span>
           )}
           {entry.penalty > 0 && (
             <span className="text-xs text-amber-600 dark:text-amber-400">
-              −{entry.penalty} penalty
+              −{entry.penalty} {t('penalty')}
             </span>
           )}
         </div>
         <div className="flex gap-3 mt-0.5 text-xs text-muted-foreground tabular-nums">
-          <span>Intel #{entry.intelligenceRank}</span>
-          <span>Speed #{entry.speedRank}</span>
+          <span>{t('Intel')} #{entry.intelligenceRank}</span>
+          <span>{t('Speed')} #{entry.speedRank}</span>
           {entry.rpmLimit && <span>{entry.rpmLimit} rpm</span>}
           {entry.rpdLimit && <span>{entry.rpdLimit} rpd</span>}
-          <span>{entry.monthlyTokenBudget} tok/mo</span>
+          <span>{entry.monthlyTokenBudget} {t('tok/mo')}</span>
         </div>
       </div>
       <Switch
@@ -208,6 +211,7 @@ function SortableModelRow({
 }
 
 export default function FallbackPage() {
+  const { t } = useI18n()
   const queryClient = useQueryClient()
   const [localEntries, setLocalEntries] = useState<FallbackEntry[] | null>(null)
 
@@ -285,18 +289,18 @@ export default function FallbackPage() {
   return (
     <div>
       <PageHeader
-        title="Fallback chain"
-        description="Drag to reorder. Requests try models top-to-bottom until one succeeds."
+        title={t('Fallback chain')}
+        description={t('Drag to reorder. Requests try models top-to-bottom until one succeeds.')}
         actions={
           <>
             <Button variant="outline" size="sm" onClick={() => sortMutation.mutate('intelligence')} disabled={sortMutation.isPending}>
-              Sort by intelligence
+              {t('Sort by intelligence')}
             </Button>
             <Button variant="outline" size="sm" onClick={() => sortMutation.mutate('speed')} disabled={sortMutation.isPending}>
-              Sort by speed
+              {t('Sort by speed')}
             </Button>
             <Button variant="outline" size="sm" onClick={() => sortMutation.mutate('budget')} disabled={sortMutation.isPending}>
-              Sort by budget
+              {t('Sort by budget')}
             </Button>
           </>
         }
@@ -308,11 +312,13 @@ export default function FallbackPage() {
         )}
 
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <p className="text-sm text-muted-foreground">{t('Loading…')}</p>
         ) : displayEntries.length === 0 ? (
           <div className="rounded-lg border border-dashed p-8 text-center">
             <p className="text-sm text-muted-foreground">
-              No models available. Add API keys on the <a href="/keys" className="underline text-foreground">Keys page</a> first.
+              {t('No models available. Add API keys on the')}{' '}
+              <a href={`${import.meta.env.BASE_URL}keys`} className="underline text-foreground">{t('Keys page')}</a>{' '}
+              {t('first.')}
             </p>
           </div>
         ) : (
@@ -342,17 +348,17 @@ export default function FallbackPage() {
             {hasChanges && (
               <div className="flex justify-end gap-2">
                 <Button variant="outline" size="sm" onClick={() => setLocalEntries(null)}>
-                  Discard
+                  {t('Discard')}
                 </Button>
                 <Button size="sm" onClick={handleSave} disabled={saveMutation.isPending}>
-                  {saveMutation.isPending ? 'Saving…' : 'Save order'}
+                  {saveMutation.isPending ? t('Saving…') : t('Save order')}
                 </Button>
               </div>
             )}
 
             {unconfiguredPlatforms.length > 0 && (
               <p className="text-xs text-muted-foreground">
-                Hidden (no keys): {unconfiguredPlatforms.join(', ')}
+                {t('Hidden (no keys):')} {unconfiguredPlatforms.join(', ')}
               </p>
             )}
           </>
