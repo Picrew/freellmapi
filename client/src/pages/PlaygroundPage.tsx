@@ -29,6 +29,14 @@ interface ChatMessage {
   }
 }
 
+function parseRoutedVia(routedVia: string | null) {
+  if (!routedVia) return undefined
+  return {
+    platform: routedVia.split('/')[0],
+    model: routedVia.split('/').slice(1).join('/'),
+  }
+}
+
 export default function PlaygroundPage() {
   const { language, t } = useI18n()
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -71,6 +79,7 @@ export default function PlaygroundPage() {
 
       const body: any = {
         messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+        stream: true,
       }
       if (selectedModel !== 'auto') body.model = selectedModel
 
@@ -82,9 +91,9 @@ export default function PlaygroundPage() {
         body: JSON.stringify(body),
       })
 
-      const latency = Date.now() - start
       const routedVia = res.headers.get('X-Routed-Via')
       const fallbackAttempts = res.headers.get('X-Fallback-Attempts')
+      const via = parseRoutedVia(routedVia)
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }))
@@ -95,23 +104,107 @@ export default function PlaygroundPage() {
         return
       }
 
-      const data = await res.json()
-      const content = data.choices?.[0]?.message?.content ?? JSON.stringify(data, null, 2)
-      const via = data._routed_via ?? (routedVia ? {
-        platform: routedVia.split('/')[0],
-        model: routedVia.split('/').slice(1).join('/'),
-      } : undefined)
+      if (!res.body) {
+        throw new Error(t('Streaming response body is not available'))
+      }
 
-      setMessages([...newMessages, {
-        role: 'assistant',
-        content,
-        meta: {
-          platform: via?.platform,
-          model: via?.model,
-          latency,
-          fallbackAttempts: fallbackAttempts ? parseInt(fallbackAttempts) : undefined,
-        },
-      }])
+      let assistantIndex: number | null = null
+      let assistantContent = ''
+      let streamError: string | null = null
+
+      const ensureAssistant = () => {
+        if (assistantIndex !== null) return
+        assistantIndex = newMessages.length
+        setMessages([...newMessages, {
+          role: 'assistant',
+          content: '',
+          meta: {
+            platform: via?.platform,
+            model: via?.model,
+            fallbackAttempts: fallbackAttempts ? parseInt(fallbackAttempts) : undefined,
+          },
+        }])
+      }
+
+      const updateAssistant = (content: string, latency?: number) => {
+        if (assistantIndex === null) return
+        setMessages(prev => {
+          const next = [...prev]
+          const current = next[assistantIndex!]
+          if (!current) return prev
+          next[assistantIndex!] = {
+            ...current,
+            content,
+            meta: {
+              ...current.meta,
+              platform: via?.platform,
+              model: via?.model,
+              latency,
+              fallbackAttempts: fallbackAttempts ? parseInt(fallbackAttempts) : undefined,
+            },
+          }
+          return next
+        })
+      }
+
+      const appendAssistant = (delta: string) => {
+        if (!delta) return
+        ensureAssistant()
+        assistantContent += delta
+        updateAssistant(assistantContent)
+      }
+
+      const handleSseLine = (line: string) => {
+        const trimmed = line.trim()
+        if (!trimmed || trimmed.startsWith(':') || !trimmed.startsWith('data:')) return
+
+        const data = trimmed.slice(5).trim()
+        if (data === '[DONE]') return
+
+        try {
+          const payload = JSON.parse(data)
+          if (payload.error) {
+            streamError = payload.error.message ?? t('Unknown error')
+            return
+          }
+
+          const delta = payload.choices?.[0]?.delta?.content
+            ?? payload.choices?.[0]?.message?.content
+            ?? ''
+          appendAssistant(delta)
+        } catch {
+          // Ignore malformed SSE frames; providers sometimes emit keepalive data.
+        }
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split(/\r?\n/)
+        buffer = lines.pop() ?? ''
+        for (const line of lines) handleSseLine(line)
+      }
+
+      if (buffer.trim()) handleSseLine(buffer)
+
+      if (streamError) {
+        ensureAssistant()
+        assistantContent += assistantContent
+          ? `\n\n${t('Error')}: ${streamError}`
+          : `${t('Error')}: ${streamError}`
+        updateAssistant(assistantContent)
+      } else if (assistantIndex === null) {
+        ensureAssistant()
+        assistantContent = t('No response content')
+        updateAssistant(assistantContent)
+      }
+
+      updateAssistant(assistantContent, Date.now() - start)
     } catch (err: any) {
       setMessages([...newMessages, {
         role: 'assistant',

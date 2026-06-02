@@ -45,6 +45,8 @@ const zh: Record<string, string> = {
   'Send': '发送',
   'Error': '错误',
   'Unknown error': '未知错误',
+  'Streaming response body is not available': '无法读取流式响应内容',
+  'No response content': '没有返回内容',
   'fallback': '次回退',
   'fallbacks': '次回退',
   'Provider credentials and the unified API key your apps connect with.': '管理 Provider 凭据，以及应用连接时使用的统一 API 密钥。',

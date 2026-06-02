@@ -253,6 +253,28 @@ export function streamChunkText(chunk: any): string {
   return chunk?.choices?.[0]?.delta?.content ?? '';
 }
 
+function beginSseStream(res: Response, route: RouteResult, attempt: number): () => void {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.setHeader('X-Routed-Via', `${route.platform}/${route.modelId}`);
+  if (attempt > 0) res.setHeader('X-Fallback-Attempts', String(attempt));
+
+  res.flushHeaders();
+  res.write(': connected\n\n');
+
+  const keepalive = setInterval(() => {
+    if (!res.writableEnded) {
+      try { res.write(': keepalive\n\n'); } catch { /* socket gone */ }
+    }
+  }, 25000);
+
+  const stop = () => clearInterval(keepalive);
+  res.on('close', stop);
+  return stop;
+}
+
 proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
   const start = Date.now();
 
@@ -402,11 +424,11 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
 
     try {
       if (stream) {
-        // Lazy header set: pre-stream errors stay retryable (no headers sent yet);
-        // mid-stream errors emit an `error` SSE frame so the client sees a real signal
-        // instead of a silently truncated stream.
+        // Start SSE immediately and keep it warm. Without an early byte, long
+        // prompts can sit behind Cloudflare until its origin timeout returns 524
+        // before the provider has produced the first token.
         let totalOutputTokens = 0;
-        let streamStarted = false;
+        const stopKeepalive = beginSseStream(res, route, attempt);
         try {
           const gen = route.provider.streamChatCompletion(
             route.apiKey, messages, route.modelId,
@@ -414,24 +436,12 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           );
 
           for await (const chunk of gen) {
-            if (!streamStarted) {
-              res.setHeader('Content-Type', 'text/event-stream');
-              res.setHeader('Cache-Control', 'no-cache');
-              res.setHeader('Connection', 'keep-alive');
-              res.setHeader('X-Routed-Via', `${route.platform}/${route.modelId}`);
-              if (attempt > 0) res.setHeader('X-Fallback-Attempts', String(attempt));
-              streamStarted = true;
-            }
             const text = streamChunkText(chunk);
             totalOutputTokens += Math.ceil(text.length / 4);
             res.write(`data: ${JSON.stringify(chunk)}\n\n`);
           }
 
-          if (!streamStarted) {
-            // Upstream returned no chunks — emit minimal successful stream.
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('X-Routed-Via', `${route.platform}/${route.modelId}`);
-          }
+          stopKeepalive();
           res.write('data: [DONE]\n\n');
           res.end();
 
@@ -441,20 +451,16 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           logRequest(route.platform, route.modelId, route.keyId, 'success', estimatedInputTokens, totalOutputTokens, Date.now() - start, null);
           return;
         } catch (streamErr: any) {
-          if (streamStarted) {
-            // Mid-stream error — finish the SSE response cleanly instead of leaving
-            // the client hanging or letting Express's default handler take over.
-            // Full upstream message goes to the log; the client sees a generic
-            // message so we don't leak provider internals into a partial stream.
-            console.error(`[Proxy] Mid-stream error from ${route.displayName}:`, streamErr.message);
-            const payload = { error: { message: `Provider error (${route.displayName}): stream interrupted`, type: 'stream_error' } };
-            try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { /* socket gone */ }
-            try { res.write('data: [DONE]\n\n'); res.end(); } catch { /* socket gone */ }
-            logRequest(route.platform, route.modelId, route.keyId, 'error', estimatedInputTokens, totalOutputTokens, Date.now() - start, streamErr.message);
-            return;
-          }
-          // Pre-stream error — bubble to outer retry/502 handler.
-          throw streamErr;
+          // Headers are already sent to prevent edge timeouts, so finish the
+          // SSE response cleanly instead of trying to fall back with a new HTTP
+          // status. Full upstream details stay in the server log.
+          stopKeepalive();
+          console.error(`[Proxy] Stream error from ${route.displayName}:`, streamErr.message);
+          const payload = { error: { message: `Provider error (${route.displayName}): stream interrupted`, type: 'stream_error' } };
+          try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { /* socket gone */ }
+          try { res.write('data: [DONE]\n\n'); res.end(); } catch { /* socket gone */ }
+          logRequest(route.platform, route.modelId, route.keyId, 'error', estimatedInputTokens, totalOutputTokens, Date.now() - start, streamErr.message);
+          return;
         }
       } else {
         const result = await route.provider.chatCompletion(
