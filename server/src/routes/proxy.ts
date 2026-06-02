@@ -253,6 +253,8 @@ export function streamChunkText(chunk: any): string {
   return chunk?.choices?.[0]?.delta?.content ?? '';
 }
 
+const STREAM_HEADER_GRACE_MS = 30_000;
+
 function beginSseStream(res: Response, route: RouteResult, attempt: number): () => void {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -424,21 +426,52 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
 
     try {
       if (stream) {
-        // Start SSE immediately and keep it warm. Without an early byte, long
-        // prompts can sit behind Cloudflare until its origin timeout returns 524
-        // before the provider has produced the first token.
+        // Keep pre-stream failures retryable. Some providers fail immediately
+        // for stale model ids (for example 404); if headers are already sent,
+        // Express cannot fall back to the next provider. Wait briefly for the
+        // first chunk/error, then start SSE if the provider is just slow, which
+        // keeps Cloudflare from returning 524 on long prompts or cold starts.
         let totalOutputTokens = 0;
-        const stopKeepalive = beginSseStream(res, route, attempt);
+        let streamStarted = false;
+        let stopKeepalive = () => {};
+        const startStream = () => {
+          if (streamStarted) return;
+          stopKeepalive = beginSseStream(res, route, attempt);
+          streamStarted = true;
+        };
+        const writeChunk = (chunk: any) => {
+          startStream();
+          const text = streamChunkText(chunk);
+          totalOutputTokens += Math.ceil(text.length / 4);
+          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        };
+
         try {
           const gen = route.provider.streamChatCompletion(
             route.apiKey, messages, route.modelId,
             { temperature, max_tokens, top_p, tools, tool_choice, parallel_tool_calls },
           );
+          const iterator = gen[Symbol.asyncIterator]();
+          const firstChunk = iterator.next();
+          const firstResult = await Promise.race([
+            firstChunk,
+            new Promise<null>(resolve => setTimeout(() => resolve(null), STREAM_HEADER_GRACE_MS)),
+          ]);
 
-          for await (const chunk of gen) {
-            const text = streamChunkText(chunk);
-            totalOutputTokens += Math.ceil(text.length / 4);
-            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          if (firstResult === null) {
+            startStream();
+            const delayedFirst = await firstChunk;
+            if (!delayedFirst.done) writeChunk(delayedFirst.value);
+          } else if (!firstResult.done) {
+            writeChunk(firstResult.value);
+          } else {
+            startStream();
+          }
+
+          while (true) {
+            const { value, done } = await iterator.next();
+            if (done) break;
+            writeChunk(value);
           }
 
           stopKeepalive();
@@ -451,6 +484,11 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           logRequest(route.platform, route.modelId, route.keyId, 'success', estimatedInputTokens, totalOutputTokens, Date.now() - start, null);
           return;
         } catch (streamErr: any) {
+          if (!streamStarted) {
+            // No bytes have gone to the client yet, so this can still use the
+            // normal retry/fallback path below.
+            throw streamErr;
+          }
           // Headers are already sent to prevent edge timeouts, so finish the
           // SSE response cleanly instead of trying to fall back with a new HTTP
           // status. Full upstream details stay in the server log.
