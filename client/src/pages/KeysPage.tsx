@@ -377,11 +377,18 @@ export default function KeysPage() {
 
         <section>
           <h2 className="text-sm font-medium mb-3">{t('Add a provider key')}</h2>
-          <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-3 rounded-lg border p-4 bg-card">
-            <div className="space-y-1.5">
+          <form
+            onSubmit={handleSubmit}
+            className={`grid grid-cols-1 gap-3 rounded-lg border p-4 bg-card md:items-end ${
+              needsAccountId
+                ? 'md:grid-cols-[220px_200px_minmax(240px,1fr)_160px_auto]'
+                : 'md:grid-cols-[220px_minmax(240px,1fr)_160px_auto]'
+            }`}
+          >
+            <div className="space-y-1.5 min-w-0">
               <Label className="text-xs">{t('Platform')}</Label>
               <Select value={platform} onValueChange={(v) => setPlatform(v as Platform)}>
-                <SelectTrigger className="w-[220px]">
+                <SelectTrigger className="w-full">
                   <SelectValue placeholder={t('Select provider')} />
                 </SelectTrigger>
                 <SelectContent>
@@ -392,17 +399,17 @@ export default function KeysPage() {
               </Select>
             </div>
             {needsAccountId && (
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 min-w-0">
                 <Label className="text-xs">{t('Account ID')}</Label>
                 <Input
                   value={accountId}
                   onChange={e => setAccountId(e.target.value)}
                   placeholder="a1b2c3d4…"
-                  className="w-[200px] font-mono text-xs"
+                  className="w-full font-mono text-xs"
                 />
               </div>
             )}
-            <div className="space-y-1.5 flex-1 min-w-[240px]">
+            <div className="space-y-1.5 min-w-0">
               <Label className="text-xs">{needsAccountId ? t('API token') : t('API key')}</Label>
               <Input
                 type="password"
@@ -412,13 +419,13 @@ export default function KeysPage() {
                 className="font-mono text-xs"
               />
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label className="text-xs">{t('Label')}</Label>
               <Input
                 value={label}
                 onChange={e => setLabel(e.target.value)}
                 placeholder={t('optional')}
-                className="w-[160px]"
+                className="w-full"
               />
             </div>
             <Button type="submit" size="sm" disabled={!platform || !apiKey || (needsAccountId && !accountId) || addKey.isPending}>
