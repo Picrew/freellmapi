@@ -6,6 +6,7 @@ import {
 } from 'recharts'
 import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PageHeader } from '@/components/page-header'
 import { useI18n } from '@/lib/i18n'
@@ -18,10 +19,17 @@ type DailyTokenHeatmapDay = {
   requests: number
   level: 0 | 1 | 2 | 3 | 4
   future: boolean
+  outsideYear: boolean
+  current: boolean
+  isoWeek: number
 }
 
 type DailyTokenHeatmapData = {
+  mode: 'weeks' | 'year'
   weeks: number
+  year: number | null
+  currentYear: number
+  currentWeek: number
   maxTokens: number
   totalTokens: number
   totalRequests: number
@@ -41,6 +49,16 @@ function formatHeatmapDate(date: string, language: string): string {
   return new Intl.DateTimeFormat(language === 'zh' ? 'zh-CN' : 'en-US', {
     month: 'short',
     day: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(`${date}T00:00:00Z`))
+}
+
+function formatHeatmapFullDate(date: string, language: string): string {
+  return new Intl.DateTimeFormat(language === 'zh' ? 'zh-CN' : 'en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    weekday: 'short',
     timeZone: 'UTC',
   }).format(new Date(`${date}T00:00:00Z`))
 }
@@ -80,33 +98,61 @@ const heatmapLevelClasses = [
 function DailyTokenHeatmap({
   data,
   language,
+  year,
+  yearOptions,
+  onYearChange,
   t,
 }: {
   data?: DailyTokenHeatmapData
   language: string
+  year: string
+  yearOptions: string[]
+  onYearChange: (year: string) => void
   t: (text: string) => string
 }) {
+  const [hoveredDay, setHoveredDay] = useState<DailyTokenHeatmapDay | null>(null)
+
   if (!data) {
     return <p className="text-sm text-muted-foreground text-center py-8">{t('Loading…')}</p>
   }
 
   const peakDay = data.peakDay
+  const activeDay = hoveredDay ?? peakDay
   const locale = language === 'zh' ? 'zh-CN' : 'en-US'
+  const yearLabel = language === 'zh'
+    ? `${data.year ?? year} 年 · 第 ${data.currentWeek} 周`
+    : `${data.year ?? year} · Week ${data.currentWeek}`
+  const activeDayLabel = hoveredDay ? t('Hovered day') : (peakDay ? t('Peak day') : t('Day details'))
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-xs text-muted-foreground">{t('Past 17 weeks')}</p>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>{t('Less')}</span>
-          {heatmapLevelClasses.map((className, level) => (
-            <span
-              key={level}
-              className={`h-3.5 w-3.5 rounded-[3px] border ${className}`}
-              aria-hidden="true"
-            />
-          ))}
-          <span>{t('More')}</span>
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-foreground">{yearLabel}</p>
+          <p className="text-xs text-muted-foreground">{t('Full year view')}</p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Select value={year} onValueChange={(value) => onYearChange(value ?? year)}>
+            <SelectTrigger className="h-8 w-[112px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {yearOptions.map(option => (
+                <SelectItem key={option} value={option}>{option}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>{t('Less')}</span>
+            {heatmapLevelClasses.map((className, level) => (
+              <span
+                key={level}
+                className={`h-3.5 w-3.5 rounded-[3px] border ${className}`}
+                aria-hidden="true"
+              />
+            ))}
+            <span>{t('More')}</span>
+          </div>
         </div>
       </div>
 
@@ -115,12 +161,12 @@ function DailyTokenHeatmap({
           <div className="grid min-w-max grid-cols-[30px_max-content] gap-2">
             <div
               className="grid gap-1"
-              style={{ gridTemplateRows: 'repeat(7, 0.875rem)' }}
+              style={{ gridTemplateRows: 'repeat(7, 0.75rem)' }}
             >
               {weekdayLabels.map(day => (
                 <span
                   key={day}
-                  className="h-3.5 text-[10px] leading-[0.875rem] text-muted-foreground"
+                  className="h-3 text-[10px] leading-3 text-muted-foreground"
                 >
                   {t(day)}
                 </span>
@@ -129,13 +175,18 @@ function DailyTokenHeatmap({
             <div
               aria-label={t('Daily token usage heatmap')}
               className="grid grid-flow-col gap-1"
-              style={{ gridTemplateRows: 'repeat(7, 0.875rem)', gridAutoColumns: '0.875rem' }}
+              style={{ gridTemplateRows: 'repeat(7, 0.75rem)', gridAutoColumns: '0.75rem' }}
             >
               {data.days.map(day => (
-                <span
+                <button
+                  type="button"
                   key={day.date}
-                  className={`h-3.5 w-3.5 rounded-[3px] border ${heatmapLevelClasses[day.level]} ${day.future ? 'opacity-30' : ''}`}
-                  title={`${formatHeatmapDate(day.date, language)} · ${formatTokens(day.tokens)} ${t('tokens')} · ${day.requests.toLocaleString(locale)} ${t('requests')}`}
+                  aria-label={`${formatHeatmapFullDate(day.date, language)} · ${formatTokens(day.tokens)} ${t('tokens')} · ${day.requests.toLocaleString(locale)} ${t('requests')}`}
+                  onMouseEnter={() => setHoveredDay(day)}
+                  onFocus={() => setHoveredDay(day)}
+                  onMouseLeave={() => setHoveredDay(null)}
+                  onBlur={() => setHoveredDay(null)}
+                  className={`relative h-3 w-3 cursor-pointer rounded-[3px] border transition duration-150 ${heatmapLevelClasses[day.level]} ${day.future || day.outsideYear ? 'opacity-30' : ''} ${day.current ? 'ring-1 ring-foreground ring-offset-1 ring-offset-background' : ''} hover:z-10 hover:scale-[2.15] hover:opacity-100 hover:ring-2 hover:ring-foreground hover:ring-offset-2 hover:ring-offset-background focus-visible:z-10 focus-visible:scale-[2.15] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-background`}
                 />
               ))}
             </div>
@@ -143,6 +194,19 @@ function DailyTokenHeatmap({
         </div>
 
         <div className="space-y-3 text-sm">
+          <div className="rounded-md border bg-background px-3 py-2">
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{activeDayLabel}</p>
+            {activeDay ? (
+              <div className="mt-1 space-y-1">
+                <p className="font-medium tabular-nums">{formatHeatmapFullDate(activeDay.date, language)}</p>
+                <p className="text-xs text-muted-foreground">
+                  {formatTokens(activeDay.tokens)} {t('tokens')} · {activeDay.requests.toLocaleString(locale)} {t('requests')} · {language === 'zh' ? `第 ${activeDay.isoWeek} 周` : `${t('Week')} ${activeDay.isoWeek}`}
+                </p>
+              </div>
+            ) : (
+              <p className="mt-1 text-xs text-muted-foreground">{t('Hover a square')}</p>
+            )}
+          </div>
           <div className="flex items-center justify-between gap-4 border-b pb-2">
             <span className="text-muted-foreground">{t('Total tokens')}</span>
             <span className="font-medium tabular-nums">{formatTokens(data.totalTokens)}</span>
@@ -170,6 +234,9 @@ function DailyTokenHeatmap({
 export default function AnalyticsPage() {
   const { language, t } = useI18n()
   const [range, setRange] = useState<TimeRange>('7d')
+  const currentYear = new Date().getFullYear()
+  const [heatmapYear, setHeatmapYear] = useState(String(currentYear))
+  const heatmapYearOptions = Array.from({ length: 4 }, (_, index) => String(currentYear - index))
 
   const { data: summary } = useQuery({
     queryKey: ['analytics', 'summary', range],
@@ -202,8 +269,8 @@ export default function AnalyticsPage() {
   })
 
   const { data: dailyTokenHeatmap } = useQuery<DailyTokenHeatmapData>({
-    queryKey: ['analytics', 'daily-token-heatmap'],
-    queryFn: () => apiFetch<DailyTokenHeatmapData>('/api/analytics/daily-token-heatmap?weeks=17'),
+    queryKey: ['analytics', 'daily-token-heatmap', heatmapYear],
+    queryFn: () => apiFetch<DailyTokenHeatmapData>(`/api/analytics/daily-token-heatmap?year=${heatmapYear}`),
   })
 
   return (
@@ -239,7 +306,14 @@ export default function AnalyticsPage() {
         </div>
 
         <Panel title={t('Daily token heatmap')}>
-          <DailyTokenHeatmap data={dailyTokenHeatmap} language={language} t={t} />
+          <DailyTokenHeatmap
+            data={dailyTokenHeatmap}
+            language={language}
+            year={heatmapYear}
+            yearOptions={heatmapYearOptions}
+            onYearChange={setHeatmapYear}
+            t={t}
+          />
         </Panel>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

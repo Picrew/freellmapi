@@ -14,20 +14,24 @@ describe('Analytics API helpers', () => {
     db.prepare(`
       INSERT INTO requests (platform, model_id, status, input_tokens, output_tokens, latency_ms, created_at)
       VALUES
+        ('nvidia', 'outside-year-padding', 'success', 900, 99, 1000, '2025-12-31T10:00:00.000Z'),
         ('nvidia', 'moonshotai/kimi-k2.6', 'success', 1200, 800, 1000, '2026-06-04T10:00:00.000Z'),
         ('groq', 'compound-mini', 'error', 300, 100, 250, '2026-05-25T08:00:00.000Z')
     `).run();
   });
 
   it('builds a complete daily token heatmap with empty and future days', () => {
-    const heatmap = buildDailyTokenHeatmap(db, 2, new Date('2026-06-05T12:00:00.000Z'));
+    const heatmap = buildDailyTokenHeatmap(db, { mode: 'weeks', weeks: 2 }, new Date('2026-06-05T12:00:00.000Z'));
 
     expect(heatmap.startDate).toBe('2026-05-25');
     expect(heatmap.endDate).toBe('2026-06-07');
     expect(heatmap.days).toHaveLength(14);
+    expect(heatmap.weeks).toBe(2);
     expect(heatmap.totalTokens).toBe(2400);
     expect(heatmap.totalRequests).toBe(2);
     expect(heatmap.maxTokens).toBe(2000);
+    expect(heatmap.currentWeek).toBe(23);
+    expect(heatmap.currentYear).toBe(2026);
 
     const firstDay = heatmap.days[0];
     expect(firstDay).toMatchObject({
@@ -60,6 +64,42 @@ describe('Analytics API helpers', () => {
       requests: 0,
       level: 0,
       future: true,
+    });
+  });
+
+  it('builds a calendar-year heatmap and excludes outside-year padding days', () => {
+    const heatmap = buildDailyTokenHeatmap(db, { mode: 'year', year: 2026 }, new Date('2026-06-05T12:00:00.000Z'));
+
+    expect(heatmap.mode).toBe('year');
+    expect(heatmap.year).toBe(2026);
+    expect(heatmap.startDate).toBe('2025-12-29');
+    expect(heatmap.endDate).toBe('2027-01-03');
+    expect(heatmap.weeks).toBe(53);
+    expect(heatmap.days).toHaveLength(371);
+    expect(heatmap.currentWeek).toBe(23);
+    expect(heatmap.currentYear).toBe(2026);
+    expect(heatmap.totalTokens).toBe(2400);
+    expect(heatmap.totalRequests).toBe(2);
+
+    const outsideYearDay = heatmap.days.find(day => day.date === '2025-12-31');
+    expect(outsideYearDay).toMatchObject({
+      tokens: 0,
+      requests: 0,
+      outsideYear: true,
+      future: false,
+    });
+
+    const currentDay = heatmap.days.find(day => day.date === '2026-06-05');
+    expect(currentDay).toMatchObject({
+      current: true,
+      isoWeek: 23,
+      outsideYear: false,
+    });
+
+    const futureDay = heatmap.days.find(day => day.date === '2026-12-31');
+    expect(futureDay).toMatchObject({
+      future: true,
+      outsideYear: false,
     });
   });
 });

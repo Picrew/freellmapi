@@ -8,6 +8,8 @@ export const analyticsRouter = Router();
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const DEFAULT_HEATMAP_WEEKS = 17;
 const MAX_HEATMAP_WEEKS = 53;
+const MIN_HEATMAP_YEAR = 2000;
+const MAX_HEATMAP_YEAR = 2100;
 
 interface DailyTokenAggregateRow {
   day: string;
@@ -21,7 +23,12 @@ interface DailyTokenHeatmapDay {
   requests: number;
   level: 0 | 1 | 2 | 3 | 4;
   future: boolean;
+  outsideYear: boolean;
+  current: boolean;
+  isoWeek: number;
 }
+
+type HeatmapPeriod = { mode: 'weeks'; weeks: number } | { mode: 'year'; year: number };
 
 function toDateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -42,21 +49,58 @@ function parseHeatmapWeeks(value: unknown): number {
   return Math.min(Math.max(weeks, 1), MAX_HEATMAP_WEEKS);
 }
 
-function getHeatmapWindow(weeks: number, now = new Date()) {
+function parseHeatmapYear(value: unknown, now = new Date()): number | null {
+  if (typeof value !== 'string') return null;
+  const year = Number.parseInt(value, 10);
+  if (!Number.isFinite(year)) return null;
+  const currentYear = now.getUTCFullYear();
+  return Math.min(Math.max(year || currentYear, MIN_HEATMAP_YEAR), MAX_HEATMAP_YEAR);
+}
+
+function getIsoWeekInfo(date: Date): { year: number; week: number } {
+  const target = startOfUtcDay(date);
+  const day = target.getUTCDay() || 7;
+  target.setUTCDate(target.getUTCDate() + 4 - day);
+
+  const year = target.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(year, 0, 1));
+  const week = Math.ceil((((target.getTime() - yearStart.getTime()) / MS_PER_DAY) + 1) / 7);
+
+  return { year, week };
+}
+
+function getRollingHeatmapWindow(weeks: number, now = new Date()) {
   const today = startOfUtcDay(now);
   const daysSinceMonday = (today.getUTCDay() + 6) % 7;
   const startOfCurrentWeek = addUtcDays(today, -daysSinceMonday);
   const start = addUtcDays(startOfCurrentWeek, -(weeks - 1) * 7);
   const end = addUtcDays(start, weeks * 7 - 1);
 
-  return { start, end, today };
+  return { start, end, today, year: null };
 }
 
-export function buildDailyTokenHeatmap(db: Database.Database, weeks: number, now = new Date()) {
-  const { start, end, today } = getHeatmapWindow(weeks, now);
+function getYearHeatmapWindow(year: number, now = new Date()) {
+  const today = startOfUtcDay(now);
+  const firstDay = new Date(Date.UTC(year, 0, 1));
+  const lastDay = new Date(Date.UTC(year, 11, 31));
+  const firstDayOffset = (firstDay.getUTCDay() + 6) % 7;
+  const lastDayOffset = 6 - ((lastDay.getUTCDay() + 6) % 7);
+  const start = addUtcDays(firstDay, -firstDayOffset);
+  const end = addUtcDays(lastDay, lastDayOffset);
+
+  return { start, end, today, year };
+}
+
+export function buildDailyTokenHeatmap(db: Database.Database, period: HeatmapPeriod, now = new Date()) {
+  const window = period.mode === 'year'
+    ? getYearHeatmapWindow(period.year, now)
+    : getRollingHeatmapWindow(period.weeks, now);
+  const { start, end, today } = window;
   const startDate = toDateKey(start);
   const endDate = toDateKey(end);
   const todayDate = toDateKey(today);
+  const currentIsoWeek = getIsoWeekInfo(today);
+  const dayCount = Math.round((end.getTime() - start.getTime()) / MS_PER_DAY) + 1;
 
   const rows = db.prepare(`
     SELECT
@@ -77,18 +121,26 @@ export function buildDailyTokenHeatmap(db: Database.Database, weeks: number, now
     },
   ]));
 
-  const rawDays = Array.from({ length: weeks * 7 }, (_, index) => {
-    const date = toDateKey(addUtcDays(start, index));
-    const usage = date <= todayDate ? byDay.get(date) : undefined;
+  const rawDays = Array.from({ length: dayCount }, (_, index) => {
+    const cellDate = addUtcDays(start, index);
+    const date = toDateKey(cellDate);
+    const outsideYear = period.mode === 'year' ? !date.startsWith(`${period.year}-`) : false;
+    const usage = date <= todayDate && !outsideYear ? byDay.get(date) : undefined;
+    const isoWeek = getIsoWeekInfo(cellDate).week;
+
     return {
       date,
       tokens: usage?.tokens ?? 0,
       requests: usage?.requests ?? 0,
       future: date > todayDate,
+      outsideYear,
+      current: date === todayDate,
+      isoWeek,
     };
   });
 
-  const maxTokens = rawDays.reduce((max, day) => Math.max(max, day.tokens), 0);
+  const inScopeDays = rawDays.filter(day => !day.outsideYear);
+  const maxTokens = inScopeDays.reduce((max, day) => Math.max(max, day.tokens), 0);
   const days = rawDays.map<DailyTokenHeatmapDay>(day => {
     const level = day.tokens <= 0 || maxTokens <= 0
       ? 0
@@ -97,7 +149,7 @@ export function buildDailyTokenHeatmap(db: Database.Database, weeks: number, now
     return { ...day, level };
   });
 
-  const elapsedDays = days.filter(day => !day.future);
+  const elapsedDays = days.filter(day => !day.future && !day.outsideYear);
   const totalTokens = elapsedDays.reduce((sum, day) => sum + day.tokens, 0);
   const totalRequests = elapsedDays.reduce((sum, day) => sum + day.requests, 0);
   const avgDailyTokens = elapsedDays.length > 0 ? Math.round(totalTokens / elapsedDays.length) : 0;
@@ -109,7 +161,11 @@ export function buildDailyTokenHeatmap(db: Database.Database, weeks: number, now
     : null;
 
   return {
-    weeks,
+    mode: period.mode,
+    weeks: Math.ceil(days.length / 7),
+    year: period.mode === 'year' ? period.year : null,
+    currentYear: currentIsoWeek.year,
+    currentWeek: currentIsoWeek.week,
     startDate,
     endDate,
     todayDate,
@@ -269,8 +325,14 @@ analyticsRouter.get('/timeline', (req: Request, res: Response) => {
 
 // Daily token heatmap for the dashboard usage overview.
 analyticsRouter.get('/daily-token-heatmap', (req: Request, res: Response) => {
+  const year = parseHeatmapYear(req.query.year);
+  if (year !== null) {
+    res.json(buildDailyTokenHeatmap(getDb(), { mode: 'year', year }));
+    return;
+  }
+
   const weeks = parseHeatmapWeeks(req.query.weeks);
-  res.json(buildDailyTokenHeatmap(getDb(), weeks));
+  res.json(buildDailyTokenHeatmap(getDb(), { mode: 'weeks', weeks }));
 });
 
 // Error distribution (grouped by error type and platform)
