@@ -12,11 +12,37 @@ import { useI18n } from '@/lib/i18n'
 
 type TimeRange = '24h' | '7d' | '30d'
 
+type DailyTokenHeatmapDay = {
+  date: string
+  tokens: number
+  requests: number
+  level: 0 | 1 | 2 | 3 | 4
+  future: boolean
+}
+
+type DailyTokenHeatmapData = {
+  weeks: number
+  maxTokens: number
+  totalTokens: number
+  totalRequests: number
+  avgDailyTokens: number
+  peakDay: DailyTokenHeatmapDay | null
+  days: DailyTokenHeatmapDay[]
+}
+
 function formatTokens(n?: number): string {
   if (!n) return '0'
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return String(n)
+}
+
+function formatHeatmapDate(date: string, language: string): string {
+  return new Intl.DateTimeFormat(language === 'zh' ? 'zh-CN' : 'en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  }).format(new Date(`${date}T00:00:00Z`))
 }
 
 function Stat({ label, value, className }: { label: string; value: string | number; className?: string }) {
@@ -42,9 +68,107 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 const axisStyle = { fontSize: 11, fill: 'var(--muted-foreground)' } as const
 const gridStyle = 'var(--border)'
 const primaryFill = 'var(--foreground)'
+const weekdayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const heatmapLevelClasses = [
+  'border-border bg-muted/40',
+  'border-sky-200 bg-sky-100 dark:border-sky-950 dark:bg-sky-950/90',
+  'border-sky-300 bg-sky-300 dark:border-sky-800 dark:bg-sky-800',
+  'border-blue-400 bg-blue-500 dark:border-blue-700 dark:bg-blue-700',
+  'border-blue-500 bg-blue-700 dark:border-blue-500 dark:bg-blue-500',
+] as const
+
+function DailyTokenHeatmap({
+  data,
+  language,
+  t,
+}: {
+  data?: DailyTokenHeatmapData
+  language: string
+  t: (text: string) => string
+}) {
+  if (!data) {
+    return <p className="text-sm text-muted-foreground text-center py-8">{t('Loading…')}</p>
+  }
+
+  const peakDay = data.peakDay
+  const locale = language === 'zh' ? 'zh-CN' : 'en-US'
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-xs text-muted-foreground">{t('Past 17 weeks')}</p>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>{t('Less')}</span>
+          {heatmapLevelClasses.map((className, level) => (
+            <span
+              key={level}
+              className={`h-3.5 w-3.5 rounded-[3px] border ${className}`}
+              aria-hidden="true"
+            />
+          ))}
+          <span>{t('More')}</span>
+        </div>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_220px]">
+        <div className="overflow-x-auto rounded-md border bg-background p-3">
+          <div className="grid min-w-max grid-cols-[30px_max-content] gap-2">
+            <div
+              className="grid gap-1"
+              style={{ gridTemplateRows: 'repeat(7, 0.875rem)' }}
+            >
+              {weekdayLabels.map(day => (
+                <span
+                  key={day}
+                  className="h-3.5 text-[10px] leading-[0.875rem] text-muted-foreground"
+                >
+                  {t(day)}
+                </span>
+              ))}
+            </div>
+            <div
+              aria-label={t('Daily token usage heatmap')}
+              className="grid grid-flow-col gap-1"
+              style={{ gridTemplateRows: 'repeat(7, 0.875rem)', gridAutoColumns: '0.875rem' }}
+            >
+              {data.days.map(day => (
+                <span
+                  key={day.date}
+                  className={`h-3.5 w-3.5 rounded-[3px] border ${heatmapLevelClasses[day.level]} ${day.future ? 'opacity-30' : ''}`}
+                  title={`${formatHeatmapDate(day.date, language)} · ${formatTokens(day.tokens)} ${t('tokens')} · ${day.requests.toLocaleString(locale)} ${t('requests')}`}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-3 text-sm">
+          <div className="flex items-center justify-between gap-4 border-b pb-2">
+            <span className="text-muted-foreground">{t('Total tokens')}</span>
+            <span className="font-medium tabular-nums">{formatTokens(data.totalTokens)}</span>
+          </div>
+          <div className="flex items-center justify-between gap-4 border-b pb-2">
+            <span className="text-muted-foreground">{t('Daily average')}</span>
+            <span className="font-medium tabular-nums">{formatTokens(data.avgDailyTokens)}</span>
+          </div>
+          <div className="flex items-center justify-between gap-4 border-b pb-2">
+            <span className="text-muted-foreground">{t('Peak day')}</span>
+            <span className="font-medium tabular-nums">
+              {peakDay ? `${formatHeatmapDate(peakDay.date, language)} · ${formatTokens(peakDay.tokens)}` : '—'}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-muted-foreground">{t('Total requests')}</span>
+            <span className="font-medium tabular-nums">{data.totalRequests.toLocaleString(locale)}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export default function AnalyticsPage() {
-  const { t } = useI18n()
+  const { language, t } = useI18n()
   const [range, setRange] = useState<TimeRange>('7d')
 
   const { data: summary } = useQuery({
@@ -75,6 +199,11 @@ export default function AnalyticsPage() {
   const { data: errorDist } = useQuery({
     queryKey: ['analytics', 'error-distribution', range],
     queryFn: () => apiFetch<{ byCategory: any[]; byPlatform: any[]; detailed: any[] }>(`/api/analytics/error-distribution?range=${range}`),
+  })
+
+  const { data: dailyTokenHeatmap } = useQuery<DailyTokenHeatmapData>({
+    queryKey: ['analytics', 'daily-token-heatmap'],
+    queryFn: () => apiFetch<DailyTokenHeatmapData>('/api/analytics/daily-token-heatmap?weeks=17'),
   })
 
   return (
@@ -108,6 +237,10 @@ export default function AnalyticsPage() {
           <Stat label={t('Avg latency')} value={`${summary?.avgLatencyMs ?? 0} ms`} />
           <Stat label={t('Est. savings')} value={`$${summary?.estimatedCostSavings ?? '0.00'}`} />
         </div>
+
+        <Panel title={t('Daily token heatmap')}>
+          <DailyTokenHeatmap data={dailyTokenHeatmap} language={language} t={t} />
+        </Panel>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Panel title={t('Requests by provider')}>

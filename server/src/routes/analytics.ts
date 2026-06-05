@@ -1,8 +1,126 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import type Database from 'better-sqlite3';
 import { getDb } from '../db/index.js';
 
 export const analyticsRouter = Router();
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const DEFAULT_HEATMAP_WEEKS = 17;
+const MAX_HEATMAP_WEEKS = 53;
+
+interface DailyTokenAggregateRow {
+  day: string;
+  tokens: number | null;
+  requests: number;
+}
+
+interface DailyTokenHeatmapDay {
+  date: string;
+  tokens: number;
+  requests: number;
+  level: 0 | 1 | 2 | 3 | 4;
+  future: boolean;
+}
+
+function toDateKey(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function startOfUtcDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function addUtcDays(date: Date, days: number): Date {
+  return new Date(date.getTime() + days * MS_PER_DAY);
+}
+
+function parseHeatmapWeeks(value: unknown): number {
+  if (typeof value !== 'string') return DEFAULT_HEATMAP_WEEKS;
+  const weeks = Number.parseInt(value, 10);
+  if (!Number.isFinite(weeks)) return DEFAULT_HEATMAP_WEEKS;
+  return Math.min(Math.max(weeks, 1), MAX_HEATMAP_WEEKS);
+}
+
+function getHeatmapWindow(weeks: number, now = new Date()) {
+  const today = startOfUtcDay(now);
+  const daysSinceMonday = (today.getUTCDay() + 6) % 7;
+  const startOfCurrentWeek = addUtcDays(today, -daysSinceMonday);
+  const start = addUtcDays(startOfCurrentWeek, -(weeks - 1) * 7);
+  const end = addUtcDays(start, weeks * 7 - 1);
+
+  return { start, end, today };
+}
+
+export function buildDailyTokenHeatmap(db: Database.Database, weeks: number, now = new Date()) {
+  const { start, end, today } = getHeatmapWindow(weeks, now);
+  const startDate = toDateKey(start);
+  const endDate = toDateKey(end);
+  const todayDate = toDateKey(today);
+
+  const rows = db.prepare(`
+    SELECT
+      date(created_at) as day,
+      SUM(input_tokens + output_tokens) as tokens,
+      COUNT(*) as requests
+    FROM requests
+    WHERE date(created_at) >= ? AND date(created_at) <= ?
+    GROUP BY date(created_at)
+    ORDER BY day ASC
+  `).all(startDate, endDate) as DailyTokenAggregateRow[];
+
+  const byDay = new Map(rows.map(row => [
+    row.day,
+    {
+      tokens: row.tokens ?? 0,
+      requests: row.requests,
+    },
+  ]));
+
+  const rawDays = Array.from({ length: weeks * 7 }, (_, index) => {
+    const date = toDateKey(addUtcDays(start, index));
+    const usage = date <= todayDate ? byDay.get(date) : undefined;
+    return {
+      date,
+      tokens: usage?.tokens ?? 0,
+      requests: usage?.requests ?? 0,
+      future: date > todayDate,
+    };
+  });
+
+  const maxTokens = rawDays.reduce((max, day) => Math.max(max, day.tokens), 0);
+  const days = rawDays.map<DailyTokenHeatmapDay>(day => {
+    const level = day.tokens <= 0 || maxTokens <= 0
+      ? 0
+      : Math.min(4, Math.max(1, Math.ceil((day.tokens / maxTokens) * 4))) as 1 | 2 | 3 | 4;
+
+    return { ...day, level };
+  });
+
+  const elapsedDays = days.filter(day => !day.future);
+  const totalTokens = elapsedDays.reduce((sum, day) => sum + day.tokens, 0);
+  const totalRequests = elapsedDays.reduce((sum, day) => sum + day.requests, 0);
+  const avgDailyTokens = elapsedDays.length > 0 ? Math.round(totalTokens / elapsedDays.length) : 0;
+  const peakDay = maxTokens > 0
+    ? elapsedDays.reduce<DailyTokenHeatmapDay | null>(
+      (peak, day) => (!peak || day.tokens > peak.tokens ? day : peak),
+      null,
+    )
+    : null;
+
+  return {
+    weeks,
+    startDate,
+    endDate,
+    todayDate,
+    maxTokens,
+    totalTokens,
+    totalRequests,
+    avgDailyTokens,
+    peakDay,
+    days,
+  };
+}
 
 // Map range to a JS-computed ISO timestamp passed as a bind parameter,
 // so the SQL string never includes user-controlled fragments.
@@ -147,6 +265,12 @@ analyticsRouter.get('/timeline', (req: Request, res: Response) => {
     successCount: r.success_count,
     failureCount: r.failure_count,
   })));
+});
+
+// Daily token heatmap for the dashboard usage overview.
+analyticsRouter.get('/daily-token-heatmap', (req: Request, res: Response) => {
+  const weeks = parseHeatmapWeeks(req.query.weeks);
+  res.json(buildDailyTokenHeatmap(getDb(), weeks));
 });
 
 // Error distribution (grouped by error type and platform)
